@@ -1,4 +1,4 @@
-streamlit
+streamlit==1.42.2
 setuptools==80.9.0
 pandas
 numpy
