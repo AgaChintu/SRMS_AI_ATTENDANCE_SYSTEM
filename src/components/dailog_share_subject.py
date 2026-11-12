@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 @st.dialog("Share Class Link", width="small")
 def share_subject_dialog(subject_name, subject_code):
 
-    app_domain = os.getenv("APP_URL", "SRMS-AI-Attendance.streamlit.app").rstrip("/")
+    app_domain = os.getenv("APP_URL", "srms-attendance.streamlit.app").rstrip("/")
     join_url = f"{app_domain}/?{urlencode({'join-code': subject_code})}"
 
     safe_name = html.escape(str(subject_name))
