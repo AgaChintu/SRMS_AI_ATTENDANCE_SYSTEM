@@ -1,3 +1,4 @@
+
 import dlib
 import streamlit as st
 import numpy as np
@@ -110,35 +111,21 @@ def get_trained_model():
 
     base_model = SVC(
         kernel="rbf",
-        class_weight="balanced",
-        probability=True
+        class_weight="balanced"
     )
 
-    # Check minimum samples per class to dynamically adjust or avoid CV error
-    from collections import Counter
-    class_counts = Counter(Y)
-    min_samples = min(class_counts.values()) if class_counts else 0
+    clf = CalibratedClassifierCV(
+        estimator=base_model,
+        method="sigmoid",
+        cv=2
+    )
 
     try:
-        if min_samples >= 2:
-            clf = CalibratedClassifierCV(
-                estimator=base_model,
-                method="sigmoid",
-                cv=min(2, min_samples)
-            )
-            clf.fit(X, Y)
-        else:
-            # Fallback if any class has less than 2 examples (avoids cross-validation split error)
-            base_model.fit(X, Y)
-            clf = base_model
+        clf.fit(X, Y)
+
     except ValueError as e:
-        # Final fallback to base model if calibration fails due to data constraints
-        try:
-            base_model.fit(X, Y)
-            clf = base_model
-        except Exception as ex:
-            st.error(f"Model training failed: {ex}")
-            return None
+        st.error(f"Model training failed: {e}")
+        return None
 
     return {
         "clf": clf,
