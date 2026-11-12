@@ -404,7 +404,7 @@ def teacher_screen_login():
     btnc1, btnc2 = st.columns(2)
 
     with btnc1:
-        if st.button("Login"):
+        if st.button("Login", icon=":material/passkey:", shortcut="control+enter", width="stretch"):
             if login_teacher(teacher_username, teacher_pass):
                 st.toast("Welcome back!", icon="👋")
                 import time
@@ -414,7 +414,7 @@ def teacher_screen_login():
                 st.error("Invalid username and password combination.")
 
     with btnc2:
-        if st.button("Register Instead", type="primary"):
+        if st.button("Register Instead", type="primary", icon=":material/passkey:", width="stretch"):
             st.session_state.teacher_login_type = "register"
             st.rerun()
 
