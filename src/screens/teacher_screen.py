@@ -404,7 +404,7 @@ def teacher_screen_login():
     btnc1, btnc2 = st.columns(2)
 
     with btnc1:
-        if st.button("Login", icon=":material/passkey:", shortcut="control+enter", width="stretch"):
+        if st.button("Login"):
             if login_teacher(teacher_username, teacher_pass):
                 st.toast("Welcome back!", icon="👋")
                 import time
