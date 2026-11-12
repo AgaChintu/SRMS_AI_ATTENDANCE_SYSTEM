@@ -2,10 +2,10 @@
 import dlib
 import streamlit as st
 import numpy as np
+
 from PIL import Image, ImageDraw
 import face_recognition_models
-from sklearn.svm import SVC
-from sklearn.calibration import CalibratedClassifierCV
+
 from src.database.db import get_all_students
 
 
@@ -27,20 +27,33 @@ def load_dlib_models():
 def get_face_embeddings(image_np):
     detector, sp, facerec = load_dlib_models()
 
-    image_np = np.ascontiguousarray(image_np, dtype=np.uint8)
-    faces = detector(image_np, 2)
+    image_np = np.ascontiguousarray(
+        image_np,
+        dtype=np.uint8
+    )
 
+    faces = detector(image_np, 2)
     encodings = []
 
     for face in faces:
         shape = sp(image_np, face)
+
         face_descriptor = facerec.compute_face_descriptor(
-            image_np, shape, 3
+            image_np,
+            shape,
+            3
         )
 
-        encodings.append(
-            np.array(face_descriptor, dtype=np.float64)
+        encoding = np.asarray(
+            face_descriptor,
+            dtype=np.float64
         )
+
+        if (
+            encoding.shape == (128,)
+            and np.all(np.isfinite(encoding))
+        ):
+            encodings.append(encoding)
 
     return encodings
 
@@ -48,17 +61,33 @@ def get_face_embeddings(image_np):
 def get_faces_with_boxes(image_np):
     detector, sp, facerec = load_dlib_models()
 
-    image_np = np.ascontiguousarray(image_np, dtype=np.uint8)
-    faces = detector(image_np, 2)
+    image_np = np.ascontiguousarray(
+        image_np,
+        dtype=np.uint8
+    )
 
+    faces = detector(image_np, 2)
     results = []
 
     for face in faces:
         shape = sp(image_np, face)
 
         face_descriptor = facerec.compute_face_descriptor(
-            image_np, shape, 2
+            image_np,
+            shape,
+            2
         )
+
+        encoding = np.asarray(
+            face_descriptor,
+            dtype=np.float64
+        )
+
+        if (
+            encoding.shape != (128,)
+            or not np.all(np.isfinite(encoding))
+        ):
+            continue
 
         results.append({
             "box": (
@@ -67,10 +96,7 @@ def get_faces_with_boxes(image_np):
                 face.right(),
                 face.bottom()
             ),
-            "encoding": np.array(
-                face_descriptor,
-                dtype=np.float64
-            )
+            "encoding": encoding
         })
 
     return results
@@ -87,48 +113,27 @@ def get_trained_model():
         embedding = student.get("face_embedding")
         student_id = student.get("student_id")
 
-        if embedding is not None and student_id is not None:
+        if embedding is None or student_id is None:
+            continue
+
+        try:
             embedding = np.asarray(
                 embedding,
                 dtype=np.float64
             )
 
-            if embedding.shape == (128,):
+            if (
+                embedding.shape == (128,)
+                and np.all(np.isfinite(embedding))
+            ):
                 X.append(embedding)
                 Y.append(student_id)
 
-    if not X:
-        return None
-
-    unique_students = set(Y)
-
-    if len(unique_students) < 2:
-        return {
-            "clf": None,
-            "X": X,
-            "Y": Y
-        }
-
-    base_model = SVC(
-        kernel="rbf",
-        class_weight="balanced"
-    )
-
-    clf = CalibratedClassifierCV(
-        estimator=base_model,
-        method="sigmoid",
-        cv=2
-    )
-
-    try:
-        clf.fit(X, Y)
-
-    except ValueError as e:
-        st.error(f"Model training failed: {e}")
-        return None
+        except (ValueError, TypeError):
+            continue
 
     return {
-        "clf": clf,
+        "clf": None,
         "X": X,
         "Y": Y
     }
@@ -138,37 +143,19 @@ def train_classifier():
     get_trained_model.clear()
     model_data = get_trained_model()
 
-    return model_data is not None
+    return bool(model_data and model_data["X"])
 
 
 def predict_attendance(class_image_np, threshold=0.58):
     detected_student = {}
 
+    if threshold <= 0:
+        raise ValueError("Threshold must be greater than 0.")
+
     model_data = get_trained_model()
 
-    if not model_data:
-        students = get_all_students() or []
-
-        X_train = []
-        y_train = []
-
-        for student in students:
-            embedding = student.get("face_embedding")
-            student_id = student.get("student_id")
-
-            if embedding is not None and student_id is not None:
-                arr = np.asarray(
-                    embedding,
-                    dtype=np.float64
-                )
-
-                if arr.shape == (128,):
-                    X_train.append(arr)
-                    y_train.append(student_id)
-
-    else:
-        X_train = model_data.get("X", [])
-        y_train = model_data.get("Y", [])
+    X_train = model_data.get("X", [])
+    y_train = model_data.get("Y", [])
 
     all_students = sorted(set(y_train), key=str)
 
@@ -177,20 +164,19 @@ def predict_attendance(class_image_np, threshold=0.58):
     if not encodings or not X_train:
         return {}, all_students, len(encodings)
 
+    X_train = np.asarray(X_train, dtype=np.float64)
+
     for encoding in encodings:
-        best_id = None
-        best_dist = float("inf")
+        distances = np.linalg.norm(
+            X_train - encoding,
+            axis=1
+        )
 
-        for i, stored_emb in enumerate(X_train):
-            dist = np.linalg.norm(
-                stored_emb - encoding
-            )
+        best_index = int(np.argmin(distances))
+        best_dist = float(distances[best_index])
+        best_id = y_train[best_index]
 
-            if dist < best_dist:
-                best_dist = dist
-                best_id = y_train[i]
-
-        if best_dist <= threshold and best_id is not None:
+        if best_dist <= threshold:
             detected_student[best_id] = True
 
     return detected_student, all_students, len(encodings)
@@ -201,6 +187,9 @@ def recognize_faces_in_image(
     candidate_students=None,
     threshold=0.58
 ):
+    if threshold <= 0:
+        raise ValueError("Threshold must be greater than 0.")
+
     if candidate_students is None:
         candidate_students = get_all_students() or []
 
@@ -208,19 +197,29 @@ def recognize_faces_in_image(
 
     for student in candidate_students:
         embedding = student.get("face_embedding")
+        student_id = student.get("student_id")
 
-        if embedding is not None:
+        if embedding is None or student_id is None:
+            continue
+
+        try:
             arr = np.asarray(
                 embedding,
                 dtype=np.float64
             )
 
-            if arr.shape == (128,):
+            if (
+                arr.shape == (128,)
+                and np.all(np.isfinite(arr))
+            ):
                 valid_candidates.append({
-                    "student_id": student.get("student_id"),
+                    "student_id": student_id,
                     "name": student.get("name", "Unknown"),
                     "embedding": arr
                 })
+
+        except (ValueError, TypeError):
+            continue
 
     detections = get_faces_with_boxes(image_np)
 
@@ -246,7 +245,10 @@ def recognize_faces_in_image(
                 best_distance = dist
                 best_student = candidate
 
-        if best_student and best_distance <= threshold:
+        if (
+            best_student is not None
+            and best_distance <= threshold
+        ):
             student_id = best_student["student_id"]
 
             confidence = max(
@@ -286,7 +288,8 @@ def recognize_faces_in_image(
                 "name": "Unknown",
                 "distance": (
                     round(best_distance, 3)
-                    if best_student else None
+                    if best_student is not None
+                    else None
                 ),
                 "confidence": 0,
                 "box": box,
@@ -339,18 +342,19 @@ def draw_detection_boxes(image_np, detection_items):
         confidence = item.get("confidence", 0)
 
         label = (
-            f"{name} ({confidence}%)"
+            f"{name} ({confidence}% match score)"
             if is_recognized
             else "Unknown Face"
         )
 
         label_height = 22
         label_width = len(label) * 8 + 12
+        label_top = max(0, top - label_height)
 
         draw.rectangle(
             [
                 left,
-                max(0, top - label_height),
+                label_top,
                 left + label_width,
                 top
             ],
@@ -360,7 +364,7 @@ def draw_detection_boxes(image_np, detection_items):
         draw.text(
             (
                 left + 6,
-                max(2, top - label_height + 3)
+                max(2, label_top + 3)
             ),
             label,
             fill=(255, 255, 255)
